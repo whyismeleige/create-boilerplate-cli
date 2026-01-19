@@ -3,15 +3,15 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import figlet from 'figlet';
-import { createProject } from './commands/create';
-import { listTemplates } from './commands/list';
+import { createProject } from './commands/create.js';
+import { listTemplates } from './commands/list.js';
 
 const program = new Command();
 
 // Display banner
 console.log(
   chalk.cyan(
-    figlet.textSync('Create Boilerplate', {
+    figlet.textSync('Project Launcher', {
       font: 'Standard',
       horizontalLayout: 'default',
     })
@@ -19,20 +19,20 @@ console.log(
 );
 
 program
-  .name('create-boilerplate')
-  .description('CLI tool to generate project boilerplate code')
+  .name('project-launcher')
+  .description('CLI tool to quickly scaffold MERN, PERN, and Next.js projects')
   .version('1.0.0');
 
-// Create command (default interactive mode)
+// Create command
 program
   .command('create [project-name]')
-  .description('Create a new project with boilerplate code')
-  .option('-s, --stack <stack>', 'Tech stack (mern, pern, nextjs, flask)')
-  .option('-t, --typescript', 'Enable TypeScript')
-  .option('-d, --docker', 'Include Docker configuration')
+  .description('Create a new project with selected template')
+  .option('-t, --template <template>', 'Template: mern, pern, nextjs')
+  .option('--no-install', 'Skip dependency installation')
   .option('--no-git', 'Skip Git initialization')
-  .option('-p, --path <path>', 'Project path', process.cwd())
-  .action(createProject);
+  .action(async (projectName, options) => {
+    await createProject(projectName, options);
+  });
 
 // List command
 program
@@ -40,14 +40,14 @@ program
   .description('List all available templates')
   .action(listTemplates);
 
-// Set default command
+// Default action
 program.action(() => {
-  createProject();
+  program.help();
 });
 
 program.parse(process.argv);
 
-// If no arguments, run interactive mode
+// If no arguments, show help
 if (!process.argv.slice(2).length) {
-  createProject();
+  program.help();
 }

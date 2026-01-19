@@ -25,11 +25,7 @@ export class Logger {
     console.log(chalk.bold.cyan(`\n${message}\n`));
   }
 
-  step(step: number, total: number, message: string): void {
-    console.log(chalk.cyan(`[${step}/${total}]`), message);
-  }
-
   newLine(): void {
     console.log('');
   }
-}
+}2

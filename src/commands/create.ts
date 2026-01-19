@@ -1,109 +1,83 @@
-import chalk from 'chalk';
+import inquirer from 'inquirer';
 import ora from 'ora';
-import { promptProjectDetails } from '../prompts';
-import { ProjectConfig } from '../types';
-import { TemplateManager } from '../templates/manager';
-import { FileSystemService } from '../utils/fileSystem';
-import { InstallService } from '../utils/installer';
-import { Logger } from '../utils/logger';
-
-interface CreateOptions {
-  stack?: string;
-  typescript?: boolean;
-  docker?: boolean;
-  git?: boolean;
-  path?: string;
-}
+import chalk from 'chalk';
+import { ProjectConfig, CreateOptions, TemplateType } from '../types/index.js';
+import { FileSystem } from '../utils/fileSystem.js';
+import { Installer } from '../utils/installer.js';
+import { Logger } from '../utils/logger.js';
+import { getMernTemplate } from '../templates/mern.js';
+import { getPernTemplate } from '../templates/pern.js';
+import { getNextjsTemplate } from '../templates/nextjs.js';
 
 export async function createProject(
   projectName?: string,
   options?: CreateOptions
-) {
+): Promise<void> {
   const logger = new Logger();
+  const fileSystem = new FileSystem();
+  const installer = new Installer();
 
   try {
-    // Get project configuration (either from prompts or options)
-    let config: ProjectConfig;
+    // Get project configuration
+    const config = await getProjectConfig(projectName, options);
 
-    if (projectName && options?.stack) {
-      // Non-interactive mode
-      config = {
-        name: projectName,
-        description: '',
-        author: '',
-        stack: options.stack as any,
-        features: {
-          typescript: options.typescript || false,
-          eslint: true,
-          prettier: true,
-          docker: options.docker || false,
-          githubActions: false,
-          testing: 'jest',
-        },
-        path: options.path || process.cwd(),
-      };
-    } else {
-      // Interactive mode
-      config = await promptProjectDetails(projectName);
-    }
-
-    logger.info(`Creating project: ${chalk.cyan(config.name)}`);
-
-    // Initialize services
-    const templateManager = new TemplateManager();
-    const fileSystemService = new FileSystemService();
-    const installService = new InstallService();
-
-    // Step 1: Validate and prepare
-    const spinner = ora('Validating configuration...').start();
-    const template = templateManager.getTemplate(config.stack);
-    const projectPath = fileSystemService.resolveProjectPath(
-      config.path,
-      config.name
-    );
+    logger.title(`🚀 Creating ${config.name}...`);
 
     // Check if directory exists
-    if (fileSystemService.directoryExists(projectPath)) {
-      spinner.fail();
-      logger.error(`Directory ${projectPath} already exists!`);
+    const projectPath = fileSystem.resolve(config.path, config.name);
+    if (fileSystem.exists(projectPath)) {
+      logger.error(`Directory ${config.name} already exists!`);
       process.exit(1);
     }
-    spinner.succeed('Configuration validated');
 
-    // Step 2: Create directory structure
-    spinner.start('Creating project structure...');
-    await fileSystemService.createProjectStructure(
-      projectPath,
-      template.structure
-    );
+    // Get template
+    const template = getTemplate(config.template);
+    
+    // Create project structure
+    const spinner = ora('Creating project structure...').start();
+    await fileSystem.createStructure(projectPath, template.structure);
     spinner.succeed('Project structure created');
 
-    // Step 3: Generate files
+    // Generate files
     spinner.start('Generating configuration files...');
-    await templateManager.generateFiles(projectPath, config, template);
+    for (const file of template.files) {
+      const filePath = fileSystem.resolve(projectPath, file.path);
+      await fileSystem.writeFile(filePath, file.content);
+    }
     spinner.succeed('Configuration files generated');
 
-    // Step 4: Install dependencies
-    if (options?.git !== false) {
-      spinner.start('Installing dependencies...');
-      await installService.installDependencies(projectPath, config);
-      spinner.succeed('Dependencies installed');
+    // Install dependencies
+    if (config.installDeps) {
+      if (config.template === 'nextjs') {
+        await installer.installNpmDeps(projectPath);
+      } else {
+        // MERN and PERN have separate frontend/backend
+        await installer.installNpmDeps(`${projectPath}/frontend`);
+        await installer.installNpmDeps(`${projectPath}/backend`);
+      }
+    }
 
-      // Step 5: Initialize Git
+    // Initialize Git
+    if (config.initGit) {
       spinner.start('Initializing Git repository...');
-      await installService.initializeGit(projectPath);
-      spinner.succeed('Git repository initialized');
+      await installer.initGit(projectPath);
+      spinner.succeed();
     }
 
     // Success message
-    logger.success('\n🎉 Success! Your project is ready!\n');
+    logger.newLine();
+    logger.success('🎉 Success! Your project is ready!');
+    logger.newLine();
     logger.info('Next steps:');
-    logger.info(`  cd ${config.name}`);
-
-    // Display stack-specific instructions
+    logger.log(`  cd ${config.name}`);
+    logger.newLine();
+    
     displayNextSteps(config);
+    
+    logger.newLine();
+    logger.log(chalk.cyan('Happy coding! 🚀'));
+    logger.newLine();
 
-    logger.info('\nHappy coding! 🚀\n');
   } catch (error) {
     logger.error('Failed to create project');
     if (error instanceof Error) {
@@ -113,27 +87,100 @@ export async function createProject(
   }
 }
 
-function displayNextSteps(config: ProjectConfig) {
+async function getProjectConfig(
+  projectName?: string,
+  options?: CreateOptions
+): Promise<ProjectConfig> {
+  let name = projectName;
+  let template: TemplateType | undefined = options?.template as TemplateType;
+
+  // Interactive prompts if not provided
+  if (!name) {
+    const nameAnswer = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'name',
+        message: 'Enter project name:',
+        default: 'my-app',
+        validate: (input: string) => {
+          if (!input.trim()) return 'Project name cannot be empty';
+          if (!/^[a-z0-9-]+$/.test(input)) {
+            return 'Project name can only contain lowercase letters, numbers, and hyphens';
+          }
+          return true;
+        },
+      },
+    ]);
+    name = nameAnswer.name;
+  }
+
+  if (!template) {
+    const templateAnswer = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'template',
+        message: 'Select template:',
+        choices: [
+          {
+            name: 'MERN (MongoDB + Express + React + Node.js)',
+            value: 'mern',
+          },
+          {
+            name: 'PERN (PostgreSQL + Express + React + Node.js)',
+            value: 'pern',
+          },
+          {
+            name: 'Next.js (Full-stack React framework)',
+            value: 'nextjs',
+          },
+        ],
+      },
+    ]);
+    template = templateAnswer.template;
+  }
+
+  return {
+    name: name!,
+    template: template!,
+    path: process.cwd(),
+    installDeps: options?.install !== false,
+    initGit: options?.git !== false,
+  };
+}
+
+function getTemplate(templateType: TemplateType) {
+  switch (templateType) {
+    case 'mern':
+      return getMernTemplate();
+    case 'pern':
+      return getPernTemplate();
+    case 'nextjs':
+      return getNextjsTemplate();
+    default:
+      throw new Error(`Unknown template: ${templateType}`);
+  }
+}
+
+function displayNextSteps(config: ProjectConfig): void {
   const logger = new Logger();
 
-  switch (config.stack) {
+  switch (config.template) {
     case 'mern':
     case 'pern':
-      logger.info('\n  # Start the backend');
-      logger.info('  cd server && npm run dev');
-      logger.info('\n  # Start the frontend (in another terminal)');
-      logger.info('  cd client && npm run dev');
+      logger.log('  # Start backend (Terminal 1)');
+      logger.log('  cd backend && npm run dev');
+      logger.newLine();
+      logger.log('  # Start frontend (Terminal 2)');
+      logger.log('  cd frontend && npm run dev');
+      logger.newLine();
+      logger.info('Frontend: http://localhost:5173');
+      logger.info('Backend: http://localhost:5000');
       break;
 
     case 'nextjs':
-      logger.info('  npm run dev');
-      break;
-
-    case 'flask':
-      logger.info('  python -m venv venv');
-      logger.info('  source venv/bin/activate  # On Windows: venv\\Scripts\\activate');
-      logger.info('  pip install -r requirements.txt');
-      logger.info('  python run.py');
+      logger.log('  npm run dev');
+      logger.newLine();
+      logger.info('App: http://localhost:3000');
       break;
   }
 }
